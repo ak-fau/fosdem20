@@ -1,0 +1,296 @@
+From 664634657e0e2b7c88b9a7cdd40c81a278944bbc Mon Sep 17 00:00:00 2001
+From: Anton Kuzmin <anton.kuzmin@cs.fau.de>
+Date: Wed, 15 Jan 2020 23:17:04 +0100
+Subject: [PATCH 1/3] vjtag-demo: Initial driver skeleton.
+
+---
+ Makefile.am                        |   6 ++
+ configure.ac                       |   1 +
+ src/hardware/vjtag-demo/api.c      | 154 +++++++++++++++++++++++++++++
+ src/hardware/vjtag-demo/protocol.c |  41 ++++++++
+ src/hardware/vjtag-demo/protocol.h |  35 +++++++
+ 5 files changed, 237 insertions(+)
+ create mode 100644 src/hardware/vjtag-demo/api.c
+ create mode 100644 src/hardware/vjtag-demo/protocol.c
+ create mode 100644 src/hardware/vjtag-demo/protocol.h
+
+diff --git a/Makefile.am b/Makefile.am
+index 2e111e93..9e82d06e 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -614,6 +614,12 @@ src_libdrivers_la_SOURCES += \
+ 	src/hardware/uni-t-ut32x/protocol.c \
+ 	src/hardware/uni-t-ut32x/api.c
+ endif
++if HW_VJTAG_DEMO
++src_libdrivers_la_SOURCES += \
++	src/hardware/vjtag-demo/protocol.h \
++	src/hardware/vjtag-demo/protocol.c \
++	src/hardware/vjtag-demo/api.c
++endif
+ if HW_YOKOGAWA_DLM
+ src_libdrivers_la_SOURCES += \
+ 	src/hardware/yokogawa-dlm/protocol.h \
+diff --git a/configure.ac b/configure.ac
+index aa0d49a8..04586b38 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -318,6 +318,7 @@ SR_DRIVER([Testo], [testo], [libusb])
+ SR_DRIVER([Tondaj SL-814], [tondaj-sl-814], [serial_comm])
+ SR_DRIVER([UNI-T DMM], [uni-t-dmm], [libusb])
+ SR_DRIVER([UNI-T UT32x], [uni-t-ut32x], [serial_comm])
++SR_DRIVER([vjtag-demo], [vjtag-demo])
+ SR_DRIVER([Yokogawa DL/DLM], [yokogawa-dlm])
+ SR_DRIVER([ZEROPLUS Logic Cube], [zeroplus-logic-cube], [libusb])
+ SR_DRIVER([ZKETECH EBD-USB], [zketech-ebd-usb], [serial_comm])
+diff --git a/src/hardware/vjtag-demo/api.c b/src/hardware/vjtag-demo/api.c
+new file mode 100644
+index 00000000..242b0342
+--- /dev/null
++++ b/src/hardware/vjtag-demo/api.c
+@@ -0,0 +1,154 @@
++/*
++ * This file is part of the libsigrok project.
++ *
++ * Copyright (C) 2020 Anton Kuzmin <anton.kuzmin@cs.fau.de>
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <config.h>
++#include "protocol.h"
++
++static struct sr_dev_driver vjtag_demo_driver_info;
++
++static GSList *scan(struct sr_dev_driver *di, GSList *options)
++{
++	struct drv_context *drvc;
++	GSList *devices;
++
++	(void)options;
++
++	devices = NULL;
++	drvc = di->context;
++	drvc->instances = NULL;
++
++	/* TODO: scan for devices, either based on a SR_CONF_CONN option
++	 * or on a USB scan. */
++
++	return devices;
++}
++
++static int dev_open(struct sr_dev_inst *sdi)
++{
++	(void)sdi;
++
++	/* TODO: get handle from sdi->conn and open it. */
++
++	return SR_OK;
++}
++
++static int dev_close(struct sr_dev_inst *sdi)
++{
++	(void)sdi;
++
++	/* TODO: get handle from sdi->conn and close it. */
++
++	return SR_OK;
++}
++
++static int config_get(uint32_t key, GVariant **data,
++	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
++{
++	int ret;
++
++	(void)sdi;
++	(void)data;
++	(void)cg;
++
++	ret = SR_OK;
++	switch (key) {
++	/* TODO */
++	default:
++		return SR_ERR_NA;
++	}
++
++	return ret;
++}
++
++static int config_set(uint32_t key, GVariant *data,
++	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
++{
++	int ret;
++
++	(void)sdi;
++	(void)data;
++	(void)cg;
++
++	ret = SR_OK;
++	switch (key) {
++	/* TODO */
++	default:
++		ret = SR_ERR_NA;
++	}
++
++	return ret;
++}
++
++static int config_list(uint32_t key, GVariant **data,
++	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
++{
++	int ret;
++
++	(void)sdi;
++	(void)data;
++	(void)cg;
++
++	ret = SR_OK;
++	switch (key) {
++	/* TODO */
++	default:
++		return SR_ERR_NA;
++	}
++
++	return ret;
++}
++
++static int dev_acquisition_start(const struct sr_dev_inst *sdi)
++{
++	/* TODO: configure hardware, reset acquisition state, set up
++	 * callbacks and send header packet. */
++
++	(void)sdi;
++
++	return SR_OK;
++}
++
++static int dev_acquisition_stop(struct sr_dev_inst *sdi)
++{
++	/* TODO: stop acquisition. */
++
++	(void)sdi;
++
++	return SR_OK;
++}
++
++static struct sr_dev_driver vjtag_demo_driver_info = {
++	.name = "vjtag-demo",
++	.longname = "vjtag-demo",
++	.api_version = 1,
++	.init = std_init,
++	.cleanup = std_cleanup,
++	.scan = scan,
++	.dev_list = std_dev_list,
++	.dev_clear = std_dev_clear,
++	.config_get = config_get,
++	.config_set = config_set,
++	.config_list = config_list,
++	.dev_open = dev_open,
++	.dev_close = dev_close,
++	.dev_acquisition_start = dev_acquisition_start,
++	.dev_acquisition_stop = dev_acquisition_stop,
++	.context = NULL,
++};
++SR_REGISTER_DEV_DRIVER(vjtag_demo_driver_info);
+diff --git a/src/hardware/vjtag-demo/protocol.c b/src/hardware/vjtag-demo/protocol.c
+new file mode 100644
+index 00000000..06dc9c09
+--- /dev/null
++++ b/src/hardware/vjtag-demo/protocol.c
+@@ -0,0 +1,41 @@
++/*
++ * This file is part of the libsigrok project.
++ *
++ * Copyright (C) 2020 Anton Kuzmin <anton.kuzmin@cs.fau.de>
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <config.h>
++#include "protocol.h"
++
++SR_PRIV int vjtag_demo_receive_data(int fd, int revents, void *cb_data)
++{
++	const struct sr_dev_inst *sdi;
++	struct dev_context *devc;
++
++	(void)fd;
++
++	if (!(sdi = cb_data))
++		return TRUE;
++
++	if (!(devc = sdi->priv))
++		return TRUE;
++
++	if (revents == G_IO_IN) {
++		/* TODO */
++	}
++
++	return TRUE;
++}
+diff --git a/src/hardware/vjtag-demo/protocol.h b/src/hardware/vjtag-demo/protocol.h
+new file mode 100644
+index 00000000..07aa6924
+--- /dev/null
++++ b/src/hardware/vjtag-demo/protocol.h
+@@ -0,0 +1,35 @@
++/*
++ * This file is part of the libsigrok project.
++ *
++ * Copyright (C) 2020 Anton Kuzmin <anton.kuzmin@cs.fau.de>
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef LIBSIGROK_HARDWARE_VJTAG_DEMO_PROTOCOL_H
++#define LIBSIGROK_HARDWARE_VJTAG_DEMO_PROTOCOL_H
++
++#include <stdint.h>
++#include <glib.h>
++#include <libsigrok/libsigrok.h>
++#include "libsigrok-internal.h"
++
++#define LOG_PREFIX "vjtag-demo"
++
++struct dev_context {
++};
++
++SR_PRIV int vjtag_demo_receive_data(int fd, int revents, void *cb_data);
++
++#endif
+-- 
+2.24.1
+

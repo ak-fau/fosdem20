@@ -1,0 +1,331 @@
+From 8793cc973367227196eda15495323f727a9a964b Mon Sep 17 00:00:00 2001
+From: Anton Kuzmin <anton.kuzmin@cs.fau.de>
+Date: Thu, 23 Jan 2020 02:29:03 +0100
+Subject: [PATCH 2/3] First connection to OpenOCD from scan() driver's callback
+
+---
+ src/hardware/vjtag-demo/api.c      | 119 ++++++++++++++++++++++++-----
+ src/hardware/vjtag-demo/protocol.c |  81 ++++++++++++++++++++
+ src/hardware/vjtag-demo/protocol.h |  21 +++++
+ 3 files changed, 200 insertions(+), 21 deletions(-)
+
+diff --git a/src/hardware/vjtag-demo/api.c b/src/hardware/vjtag-demo/api.c
+index 242b0342..f2d7d70a 100644
+--- a/src/hardware/vjtag-demo/api.c
++++ b/src/hardware/vjtag-demo/api.c
+@@ -20,23 +20,99 @@
+ #include <config.h>
+ #include "protocol.h"
+ 
++static const uint32_t scanopts[] = {
++				    SR_CONF_CONN,
++};
++
++static const uint32_t drvopts[] = {
++				   SR_CONF_LOGIC_ANALYZER,
++};
++
++static const uint32_t devopts[] = {
++				   SR_CONF_CONN | SR_CONF_GET,
++				   SR_CONF_LIMIT_SAMPLES | SR_CONF_GET,
++				   SR_CONF_NUM_LOGIC_CHANNELS | SR_CONF_GET,
++				   SR_CONF_TRIGGER_MATCH | SR_CONF_LIST,
++};
++
++static const int32_t trigger_matches[] = {
++					  SR_TRIGGER_ZERO,
++					  SR_TRIGGER_ONE,
++					  // SR_TRIGGER_RISING,
++					  // SR_TRIGGER_FALLING,
++					  // SR_TRIGGER_EDGE,
++};
++
+ static struct sr_dev_driver vjtag_demo_driver_info;
+ 
+ static GSList *scan(struct sr_dev_driver *di, GSList *options)
+ {
+ 	struct drv_context *drvc;
+ 	GSList *devices;
++	const char *conn = NULL;
++
++	const int num_channels = 8;
+ 
+-	(void)options;
++	struct sr_config *src;
++	GSList *l;
+ 
+ 	devices = NULL;
+ 	drvc = di->context;
+ 	drvc->instances = NULL;
+ 
+-	/* TODO: scan for devices, either based on a SR_CONF_CONN option
+-	 * or on a USB scan. */
++	for (l = options; l; l = l->next) {
++		src = l->data;
++		switch (src->key) {
++		case SR_CONF_CONN:
++			conn = g_variant_get_string(src->data, NULL);
++			break;
++		}
++	}
++
++	if (!conn)
++		return NULL;
++
++	struct vjtag_demo_tcp *tcp = vjtag_demo_tcp_new();
++
++	char **strs = g_strsplit(conn, "/", 3);
++	tcp->address = g_strdup(strs[1]);
++	tcp->port = g_strdup(strs[2]);
++	g_strfreev(strs);
++
++	if (!tcp->address)
++		return NULL;
++
++	if (vjtag_demo_tcp_open(tcp) != SR_OK)
++		return NULL;
++
++        //	if (vjtag_demo_read_ids(tcp) != SR_OK)
++        //		return NULL;
++
++	struct sr_dev_inst *sdi = g_malloc0(sizeof(struct sr_dev_inst));
++
++	sdi->status = SR_ST_INACTIVE;
++	sdi->vendor = g_strdup("fosdem'20");
++	sdi->model = g_strdup("vjtag-la-mx10");
++	sdi->version = g_strdup("v0.1");
++	sdi->driver = di;
++
++        //	struct dev_context *devc = vjtag_demo_dev_new();
++        //	sdi->priv = devc;
++
++	for (uint32_t i = 0; i < num_channels; i++) {
++	        char *name = g_strdup_printf("D%d", i);
++	        sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, name);
++	        g_free(name);
++	}
++
++	sdi->inst_type = SR_INST_USER;
++	sdi->conn = tcp;
++
++	vjtag_demo_tcp_close(tcp);
++
++	devices = g_slist_append(devices, sdi);
+ 
+-	return devices;
++	return std_scan_complete(di, devices);
+ }
+ 
+ static int dev_open(struct sr_dev_inst *sdi)
+@@ -62,15 +138,18 @@ static int config_get(uint32_t key, GVariant **data,
+ {
+ 	int ret;
+ 
+-	(void)sdi;
++	// (void)sdi;
+ 	(void)data;
+ 	(void)cg;
+ 
+ 	ret = SR_OK;
++
+ 	switch (key) {
+-	/* TODO */
++	case SR_CONF_NUM_LOGIC_CHANNELS:
++	  *data = g_variant_new_uint32(g_slist_length(sdi->channels));
++	  break;
+ 	default:
+-		return SR_ERR_NA;
++		ret = SR_ERR_NA;
+ 	}
+ 
+ 	return ret;
+@@ -81,15 +160,16 @@ static int config_set(uint32_t key, GVariant *data,
+ {
+ 	int ret;
+ 
+-	(void)sdi;
++	(void)key;
+ 	(void)data;
++	(void)sdi;
+ 	(void)cg;
+ 
+ 	ret = SR_OK;
++
+ 	switch (key) {
+-	/* TODO */
+ 	default:
+-		ret = SR_ERR_NA;
++	  ret = SR_ERR_NA;
+ 	}
+ 
+ 	return ret;
+@@ -98,20 +178,17 @@ static int config_set(uint32_t key, GVariant *data,
+ static int config_list(uint32_t key, GVariant **data,
+ 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
+ {
+-	int ret;
+-
+-	(void)sdi;
+-	(void)data;
+-	(void)cg;
+-
+-	ret = SR_OK;
+ 	switch (key) {
+-	/* TODO */
++	case SR_CONF_SCAN_OPTIONS:
++	case SR_CONF_DEVICE_OPTIONS:
++		return STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
++	case SR_CONF_TRIGGER_MATCH:
++		*data = std_gvar_array_i32(ARRAY_AND_SIZE(trigger_matches));
++		break;
+ 	default:
+ 		return SR_ERR_NA;
+ 	}
+-
+-	return ret;
++	return SR_OK;
+ }
+ 
+ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
+@@ -135,7 +212,7 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
+ 
+ static struct sr_dev_driver vjtag_demo_driver_info = {
+ 	.name = "vjtag-demo",
+-	.longname = "vjtag-demo",
++	.longname = "VJTAG Logic Analyzer Demo Driver",
+ 	.api_version = 1,
+ 	.init = std_init,
+ 	.cleanup = std_cleanup,
+diff --git a/src/hardware/vjtag-demo/protocol.c b/src/hardware/vjtag-demo/protocol.c
+index 06dc9c09..991ec229 100644
+--- a/src/hardware/vjtag-demo/protocol.c
++++ b/src/hardware/vjtag-demo/protocol.c
+@@ -17,9 +17,90 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++
+ #include <config.h>
++
++#include <sys/types.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#include <netdb.h>
++#include <sys/ioctl.h>
++#include <string.h>
++#include <unistd.h>
++#include <errno.h>
++
+ #include "protocol.h"
+ 
++SR_PRIV struct vjtag_demo_tcp *vjtag_demo_tcp_new(void)
++{
++	struct vjtag_demo_tcp *tcp;
++
++	tcp = g_malloc0(sizeof(struct vjtag_demo_tcp));
++	tcp->address = NULL;
++	tcp->port = NULL;
++	tcp->socket = -1;
++
++	return tcp;
++}
++
++SR_PRIV void vjtag_demo_tcp_free(struct vjtag_demo_tcp *tcp)
++{
++	g_free(tcp->address);
++	g_free(tcp->port);
++}
++
++SR_PRIV int vjtag_demo_tcp_open(struct vjtag_demo_tcp *tcp)
++{
++	struct addrinfo hints;
++	struct addrinfo *results, *res;
++	int err;
++
++	memset(&hints, 0, sizeof(hints));
++	hints.ai_family = AF_UNSPEC;
++	hints.ai_socktype = SOCK_STREAM;
++	hints.ai_protocol = IPPROTO_TCP;
++
++	err = getaddrinfo(tcp->address, tcp->port, &hints, &results);
++
++	if (err) {
++		sr_err("Address lookup failed: %s:%s: %s", tcp->address,
++		       tcp->port, gai_strerror(err));
++		return SR_ERR;
++	}
++
++	for (res = results; res; res = res->ai_next) {
++		if ((tcp->socket = socket(res->ai_family, res->ai_socktype,
++			      res->ai_protocol)) < 0)
++			continue;
++		if (connect(tcp->socket, res->ai_addr, res->ai_addrlen) != 0) {
++			close(tcp->socket);
++			tcp->socket = -1;
++			continue;
++		}
++		break;
++	}
++
++	freeaddrinfo(results);
++
++	if (tcp->socket < 0) {
++		sr_err("Failed to connect to %s:%s: %s", tcp->address, tcp->port,
++		       g_strerror(errno));
++		return SR_ERR;
++	}
++
++	return SR_OK;
++}
++
++SR_PRIV int vjtag_demo_tcp_close(struct vjtag_demo_tcp *tcp)
++{
++	int ret = SR_OK;
++	if (close(tcp->socket) < 0)
++		ret = SR_ERR;
++	tcp->socket = -1;
++	return ret;
++}
++
+ SR_PRIV int vjtag_demo_receive_data(int fd, int revents, void *cb_data)
+ {
+ 	const struct sr_dev_inst *sdi;
+diff --git a/src/hardware/vjtag-demo/protocol.h b/src/hardware/vjtag-demo/protocol.h
+index 07aa6924..bdb20ff5 100644
+--- a/src/hardware/vjtag-demo/protocol.h
++++ b/src/hardware/vjtag-demo/protocol.h
+@@ -27,9 +27,30 @@
+ 
+ #define LOG_PREFIX "vjtag-demo"
+ 
++
++struct vjtag_demo_tcp {
++	char *address;
++	char *port;
++	int socket;
++};
++
+ struct dev_context {
++	uint32_t data_width;
++	uint64_t limit_samples;
+ };
+ 
++SR_PRIV struct vjtag_demo_tcp *vjtag_demo_tcp_new(void);
++SR_PRIV void vjtag_demo_tcp_free(struct vjtag_demo_tcp *tcp);
++
++SR_PRIV int vjtag_demo_tcp_open(struct vjtag_demo_tcp *tcp);
++SR_PRIV int vjtag_demo_tcp_close(struct vjtag_demo_tcp *tcp);
++
++SR_PRIV int vjtag_demo_tcp_receive(struct vjtag_demo_tcp *tcp,
++                                 uint8_t *buf, size_t bufsize);
++
++SR_PRIV int vjtag_demo_convert_trigger(const struct sr_dev_inst *sdi);
++// SR_PRIV struct dev_context *vjtag_demo_dev_new(void);
++
+ SR_PRIV int vjtag_demo_receive_data(int fd, int revents, void *cb_data);
+ 
+ #endif
+-- 
+2.24.1
+

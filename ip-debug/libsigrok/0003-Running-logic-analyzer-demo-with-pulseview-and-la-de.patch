@@ -1,0 +1,664 @@
+From 93f5189b2876f5b4d89cf8b9a8d55224680d3f1a Mon Sep 17 00:00:00 2001
+From: Anton Kuzmin <anton.kuzmin@cs.fau.de>
+Date: Sun, 26 Jan 2020 23:51:36 +0100
+Subject: [PATCH 3/3] Running logic analyzer demo (with pulseview and
+ la-demo/MX10 hardware)
+
+---
+ src/hardware/vjtag-demo/api.c      | 164 +++++++++++------
+ src/hardware/vjtag-demo/protocol.c | 274 +++++++++++++++++++++++++++--
+ src/hardware/vjtag-demo/protocol.h |  27 ++-
+ 3 files changed, 392 insertions(+), 73 deletions(-)
+
+diff --git a/src/hardware/vjtag-demo/api.c b/src/hardware/vjtag-demo/api.c
+index f2d7d70a..2ab92c92 100644
+--- a/src/hardware/vjtag-demo/api.c
++++ b/src/hardware/vjtag-demo/api.c
+@@ -21,26 +21,32 @@
+ #include "protocol.h"
+ 
+ static const uint32_t scanopts[] = {
+-				    SR_CONF_CONN,
++	SR_CONF_CONN,
+ };
+ 
+ static const uint32_t drvopts[] = {
+-				   SR_CONF_LOGIC_ANALYZER,
++	SR_CONF_DEMO_DEV,
++	SR_CONF_LOGIC_ANALYZER,
+ };
+ 
+ static const uint32_t devopts[] = {
+-				   SR_CONF_CONN | SR_CONF_GET,
+-				   SR_CONF_LIMIT_SAMPLES | SR_CONF_GET,
+-				   SR_CONF_NUM_LOGIC_CHANNELS | SR_CONF_GET,
+-				   SR_CONF_TRIGGER_MATCH | SR_CONF_LIST,
++	SR_CONF_CONN | SR_CONF_GET,
++	SR_CONF_NUM_LOGIC_CHANNELS | SR_CONF_GET,
++	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_LIST,
++	SR_CONF_TRIGGER_MATCH | SR_CONF_LIST,
++	SR_CONF_CAPTURE_RATIO | SR_CONF_GET | SR_CONF_SET,
+ };
+ 
+ static const int32_t trigger_matches[] = {
+-					  SR_TRIGGER_ZERO,
+-					  SR_TRIGGER_ONE,
+-					  // SR_TRIGGER_RISING,
+-					  // SR_TRIGGER_FALLING,
+-					  // SR_TRIGGER_EDGE,
++	SR_TRIGGER_ZERO,
++	SR_TRIGGER_ONE,
++	// SR_TRIGGER_RISING,
++	// SR_TRIGGER_FALLING,
++	// SR_TRIGGER_EDGE,
++};
++
++static const uint64_t samplerates[] = {
++	SAMPLE_RATE,
+ };
+ 
+ static struct sr_dev_driver vjtag_demo_driver_info;
+@@ -51,8 +57,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
+ 	GSList *devices;
+ 	const char *conn = NULL;
+ 
+-	const int num_channels = 8;
+-
+ 	struct sr_config *src;
+ 	GSList *l;
+ 
+@@ -85,8 +89,8 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
+ 	if (vjtag_demo_tcp_open(tcp) != SR_OK)
+ 		return NULL;
+ 
+-        //	if (vjtag_demo_read_ids(tcp) != SR_OK)
+-        //		return NULL;
++	if (vjtag_demo_check_id(tcp) != SR_OK)
++		return NULL;
+ 
+ 	struct sr_dev_inst *sdi = g_malloc0(sizeof(struct sr_dev_inst));
+ 
+@@ -96,13 +100,15 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
+ 	sdi->version = g_strdup("v0.1");
+ 	sdi->driver = di;
+ 
+-        //	struct dev_context *devc = vjtag_demo_dev_new();
+-        //	sdi->priv = devc;
++	struct dev_context *devc = g_malloc0(sizeof(struct dev_context));
++	devc->limit_samples = LIMIT_SAMPLES;
++	devc->capture_ratio = 25;
++	sdi->priv = devc;
+ 
+-	for (uint32_t i = 0; i < num_channels; i++) {
+-	        char *name = g_strdup_printf("D%d", i);
+-	        sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, name);
+-	        g_free(name);
++	for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
++		char *name = g_strdup_printf("D%d", i);
++		sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, name);
++		g_free(name);
+ 	}
+ 
+ 	sdi->inst_type = SR_INST_USER;
+@@ -115,68 +121,102 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
+ 	return std_scan_complete(di, devices);
+ }
+ 
+-static int dev_open(struct sr_dev_inst *sdi)
++static int dev_clear(const struct sr_dev_driver *di)
+ {
+-	(void)sdi;
++	struct drv_context *drvc = di->context;
++	struct sr_dev_inst *sdi;
++	GSList *l;
+ 
+-	/* TODO: get handle from sdi->conn and open it. */
++	if (drvc) {
++		for (l = drvc->instances; l; l = l->next) {
++			sdi = l->data;
++			struct vjtag_demo_tcp *tcp = sdi->conn;
++			if (tcp) {
++				vjtag_demo_tcp_close(tcp);
++				vjtag_demo_tcp_free(tcp);
++				g_free(tcp);
++			}
++			sdi->conn = NULL;
++		}
++	}
+ 
+-	return SR_OK;
++	return std_dev_clear(di);
+ }
+ 
+-static int dev_close(struct sr_dev_inst *sdi)
++static int dev_open(struct sr_dev_inst *sdi)
+ {
+-	(void)sdi;
++	if (!sdi || !sdi->conn)
++		return SR_ERR;
+ 
+-	/* TODO: get handle from sdi->conn and close it. */
++	return vjtag_demo_tcp_open(sdi->conn);
++}
+ 
+-	return SR_OK;
++static int dev_close(struct sr_dev_inst *sdi)
++{
++	if (!sdi || !sdi->conn)
++		return SR_ERR;
++
++	return vjtag_demo_tcp_close(sdi->conn);
+ }
+ 
+ static int config_get(uint32_t key, GVariant **data,
+-	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
++		      const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
+ {
+-	int ret;
+-
+ 	// (void)sdi;
+ 	(void)data;
+ 	(void)cg;
+-
+-	ret = SR_OK;
++	struct dev_context *devc;
++	struct vjtag_demo_tcp *tcp;
+ 
+ 	switch (key) {
++	case SR_CONF_CONN:
++		if (!sdi || !sdi->conn)
++			return SR_ERR_ARG;
++		tcp = sdi->conn;
++		*data = g_variant_new_printf("%s:%s", tcp->address, tcp->port);
++		break;
+ 	case SR_CONF_NUM_LOGIC_CHANNELS:
+-	  *data = g_variant_new_uint32(g_slist_length(sdi->channels));
+-	  break;
++		if (!sdi)
++			return SR_ERR;
++		*data = g_variant_new_uint32(g_slist_length(sdi->channels));
++		break;
++	case SR_CONF_SAMPLERATE:
++		*data = g_variant_new_uint64(SAMPLE_RATE);
++		break;
++	case SR_CONF_CAPTURE_RATIO:
++		if (!sdi)
++			return SR_ERR;
++		devc = sdi->priv;
++		*data = g_variant_new_uint64(devc->capture_ratio);
++		break;
+ 	default:
+-		ret = SR_ERR_NA;
++		return SR_ERR_NA;
+ 	}
+-
+-	return ret;
++	return SR_OK;
+ }
+ 
+ static int config_set(uint32_t key, GVariant *data,
+-	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
++		      const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
+ {
+-	int ret;
+-
+ 	(void)key;
+ 	(void)data;
+-	(void)sdi;
++	// (void)sdi;
+ 	(void)cg;
+ 
+-	ret = SR_OK;
++	struct dev_context *devc = sdi->priv;
+ 
+ 	switch (key) {
++	case SR_CONF_CAPTURE_RATIO:
++		devc->capture_ratio = g_variant_get_uint64(data);
++		break;
+ 	default:
+-	  ret = SR_ERR_NA;
++		return SR_ERR_NA;
+ 	}
+-
+-	return ret;
++	return SR_OK;
+ }
+ 
+ static int config_list(uint32_t key, GVariant **data,
+-	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
++		       const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
+ {
+ 	switch (key) {
+ 	case SR_CONF_SCAN_OPTIONS:
+@@ -185,6 +225,9 @@ static int config_list(uint32_t key, GVariant **data,
+ 	case SR_CONF_TRIGGER_MATCH:
+ 		*data = std_gvar_array_i32(ARRAY_AND_SIZE(trigger_matches));
+ 		break;
++	case SR_CONF_SAMPLERATE:
++		*data = std_gvar_samplerates(ARRAY_AND_SIZE(samplerates));
++		break;
+ 	default:
+ 		return SR_ERR_NA;
+ 	}
+@@ -193,19 +236,32 @@ static int config_list(uint32_t key, GVariant **data,
+ 
+ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
+ {
+-	/* TODO: configure hardware, reset acquisition state, set up
+-	 * callbacks and send header packet. */
++	struct vjtag_demo_tcp *tcp = sdi->conn;
++	struct dev_context *devc = sdi->priv;
+ 
+-	(void)sdi;
++	vjtag_demo_convert_trigger(sdi);
++	vjtag_demo_configure_trigger(tcp->socket, devc);
++	vjtag_demo_configure_pre_store(tcp->socket, devc);
++
++	sr_session_source_add(sdi->session, tcp->socket, G_IO_IN, 100,
++			      vjtag_demo_receive_data, (struct sr_dev_inst *)sdi);
++
++	vjtag_demo_acquisition_start(tcp->socket);
++
++	std_session_send_df_header(sdi);
+ 
+ 	return SR_OK;
+ }
+ 
+ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
+ {
+-	/* TODO: stop acquisition. */
++	struct vjtag_demo_tcp *tcp = sdi->conn;
++	//struct dev_context *devc = sdi->priv;
++
++	std_session_send_df_end(sdi);
++	sr_session_source_remove(sdi->session, tcp->socket);
+ 
+-	(void)sdi;
++	vjtag_demo_acquisition_stop(tcp->socket);
+ 
+ 	return SR_OK;
+ }
+@@ -218,7 +274,7 @@ static struct sr_dev_driver vjtag_demo_driver_info = {
+ 	.cleanup = std_cleanup,
+ 	.scan = scan,
+ 	.dev_list = std_dev_list,
+-	.dev_clear = std_dev_clear,
++	.dev_clear = dev_clear,
+ 	.config_get = config_get,
+ 	.config_set = config_set,
+ 	.config_list = config_list,
+diff --git a/src/hardware/vjtag-demo/protocol.c b/src/hardware/vjtag-demo/protocol.c
+index 991ec229..74dd3b3f 100644
+--- a/src/hardware/vjtag-demo/protocol.c
++++ b/src/hardware/vjtag-demo/protocol.c
+@@ -17,7 +17,6 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-
+ #include <config.h>
+ 
+ #include <sys/types.h>
+@@ -32,6 +31,13 @@
+ 
+ #include "protocol.h"
+ 
++#define COMMAND_TOKEN 0x1A
++#define BUF_SIZE 256
++
++#define TAP_NAME " max10.fpga "
++
++SR_PRIV char socket_buf[BUF_SIZE];
++
+ SR_PRIV struct vjtag_demo_tcp *vjtag_demo_tcp_new(void)
+ {
+ 	struct vjtag_demo_tcp *tcp;
+@@ -71,7 +77,7 @@ SR_PRIV int vjtag_demo_tcp_open(struct vjtag_demo_tcp *tcp)
+ 
+ 	for (res = results; res; res = res->ai_next) {
+ 		if ((tcp->socket = socket(res->ai_family, res->ai_socktype,
+-			      res->ai_protocol)) < 0)
++					  res->ai_protocol)) < 0)
+ 			continue;
+ 		if (connect(tcp->socket, res->ai_addr, res->ai_addrlen) != 0) {
+ 			close(tcp->socket);
+@@ -94,28 +100,276 @@ SR_PRIV int vjtag_demo_tcp_open(struct vjtag_demo_tcp *tcp)
+ 
+ SR_PRIV int vjtag_demo_tcp_close(struct vjtag_demo_tcp *tcp)
+ {
+-	int ret = SR_OK;
+-	if (close(tcp->socket) < 0)
+-		ret = SR_ERR;
++	int socket = tcp->socket;
+ 	tcp->socket = -1;
++
++	if (socket > 0) {
++		(void)vjtag_demo_run_cmd(socket, "exit");
++		if (close(socket) < 0) {
++			sr_err("Close failed: %s", g_strerror(errno));
++			return SR_ERR;
++		}
++	}
++	return SR_OK;
++}
++
++SR_PRIV char *vjtag_demo_recv(int fd)
++{
++	char *b = socket_buf;
++	int r;
++	int rc = 0;
++
++	while (rc < BUF_SIZE-1) {
++		r = recv(fd, b, 1, 0);
++		if (r < 0) {
++			sr_err("Receive error: %s", g_strerror(errno));
++			return NULL;
++		}
++		if (*b == COMMAND_TOKEN) {
++			*b = '\0';
++			sr_dbg("-> %s", socket_buf);
++			break;
++		}
++		rc++; b++;
++	}
++
++	return socket_buf;
++}
++
++SR_PRIV char *vjtag_demo_run_cmd(const int fd, const char *cmd)
++{
++	char *b;
++	const char *c;
++	int len;
++	int res;
++
++	len = strlen(cmd);
++
++	if (len > BUF_SIZE-1)
++		return NULL;
++
++	c = cmd;
++	b = socket_buf;
++
++	while ((*b = *c++)) b++;
++	*b = COMMAND_TOKEN;
++
++	res = send(fd, (const char *)socket_buf, len+1, 0);
++
++	if (res < 0) {
++		sr_err("Send error: %s", g_strerror(errno));
++		return NULL;
++	}
++
++	if (res < len+1) {
++		sr_dbg("Send error: sent %d of %d bytes", res, len+1);
++		return NULL;
++	}
++
++	sr_dbg("<- %s", cmd);
++
++	return vjtag_demo_recv(fd);
++}
++
++SR_PRIV int vjtag_demo_check_id(struct vjtag_demo_tcp *tcp)
++{
++	char *res;
++	int fd = tcp->socket;
++
++	res = vjtag_demo_run_cmd(fd, "irscan" TAP_NAME "0x006"); /* IDCODE */
++	if (!res)
++		return SR_ERR;
++	res = vjtag_demo_run_cmd(fd, "drscan" TAP_NAME "32 0");
++	if (!res)
++		return SR_ERR;
++
++	if (strcmp(res, "031050DD")) /* Altera/Intel 10M50DA device ID */
++		return SR_ERR;
++
++	return SR_OK;
++}
++
++SR_PRIV int vjtag_demo_convert_trigger(const struct sr_dev_inst *sdi)
++{
++	struct dev_context *devc;
++	struct sr_trigger *trigger;
++	struct sr_trigger_stage *stage;
++	struct sr_trigger_match *match;
++
++	const GSList *l, *m;
++
++	devc = sdi->priv;
++
++	devc->t_mask = 0;
++	devc->t_data = 0;
++
++	if (!(trigger = sr_session_trigger_get(sdi->session)))
++		return SR_OK;
++
++	for (l = trigger->stages; l; l = l->next) {
++		stage = l->data;
++		for (m = stage->matches; m; m = m->next) {
++			match = m->data;
++			uint8_t bit = 1 << (match->channel->index % 8);
++			if (!match->channel->enabled)
++				continue;
++
++			if (match->match == SR_TRIGGER_ONE) {
++				devc->t_mask |= bit;
++				devc->t_data |= bit;
++			} else if (match->match == SR_TRIGGER_ZERO) {
++				devc->t_mask |= bit;
++				devc->t_data &= ~bit;
++			}
++		}
++	}
++
++	sr_dbg("Trigger mask: 0x%02x", devc->t_mask);
++	sr_dbg("Trigger data: 0x%02x", devc->t_data);
++
++	return SR_OK;
++}
++
++SR_PRIV uint32_t vjtag_demo_rw_reg(int fd, uint8_t r, uint8_t l, uint32_t d)
++{
++	char cmd[64];
++	uint32_t ret = 0;
++
++	sprintf(cmd, "vir_scan" TAP_NAME "0x%02x", 0x10 + (r & 0x0f));
++	vjtag_demo_run_cmd(fd, cmd);
++
++	sprintf(cmd, "vdr_scan" TAP_NAME "%d 0x%x", l, d);
++	sscanf(vjtag_demo_run_cmd(fd, cmd), "%x", &ret);
+ 	return ret;
+ }
+ 
++SR_PRIV int vjtag_demo_configure_trigger(int fd, struct dev_context *devc)
++{
++	vjtag_demo_rw_reg(fd, 1, 8, 0x80);
++	vjtag_demo_rw_reg(fd, 1, 8, 0x00);
++
++	vjtag_demo_rw_reg(fd, 4, 8, devc->t_mask);
++	vjtag_demo_rw_reg(fd, 5, 8, devc->t_data);
++
++	return SR_OK;
++}
++
++SR_PRIV int vjtag_demo_configure_pre_store(int fd, struct dev_context *devc)
++{
++	uint16_t post_cnt;
++
++	post_cnt = ((devc->limit_samples - 1) * (100 - devc->capture_ratio)) / 100;
++	vjtag_demo_rw_reg(fd, 9, 10, post_cnt);
++
++	return SR_OK;
++}
++
++SR_PRIV int vjtag_demo_acquisition_start(int fd)
++{
++	vjtag_demo_rw_reg(fd, 1, 8, 0x01);
++	return SR_OK;
++}
++
++SR_PRIV int vjtag_demo_acquisition_stop(int fd)
++{
++	vjtag_demo_rw_reg(fd, 1, 8, 0);
++	return SR_OK;
++}
++
+ SR_PRIV int vjtag_demo_receive_data(int fd, int revents, void *cb_data)
+ {
++	(void)revents;
++
+ 	const struct sr_dev_inst *sdi;
+ 	struct dev_context *devc;
++	struct vjtag_demo_tcp *tcp;
+ 
+-	(void)fd;
++	int i;
++	uint8_t *b;
++	uint8_t la_status;
++	uint16_t t_addr;
++	int16_t start_addr;
++	uint16_t post_cnt, pre_cnt;
+ 
+ 	if (!(sdi = cb_data))
+-		return TRUE;
++		return FALSE;
+ 
+ 	if (!(devc = sdi->priv))
+-		return TRUE;
++		return FALSE;
++
++	if (!(tcp = sdi->conn))
++		return FALSE;
++
++	fd = tcp->socket;
++
++	struct sr_datafeed_packet packet;
++	struct sr_datafeed_logic logic;
++
++	la_status = vjtag_demo_rw_reg(tcp->socket, 0, 8, 0);
++
++	sr_dbg("receive_data(), status = %02x", la_status);
++
++	if (la_status & 0x80) { /* Acqusiont complete */
++
++		if (!devc->raw_sample_buf) {
++			devc->raw_sample_buf =
++				g_try_malloc(devc->limit_samples);
++			if (!devc->raw_sample_buf) {
++				sr_err("Sample buffer malloc failed.");
++				return FALSE;
++			}
++		}
++
++		t_addr = vjtag_demo_rw_reg(tcp->socket, 0x0A, 10, 0);
++		sr_dbg("trigger addr = 0x%x", t_addr);
++
++		post_cnt = vjtag_demo_rw_reg(fd, 9, 10, 0);
++		sr_dbg("post counter = %d", post_cnt);
++
++		pre_cnt = LIMIT_SAMPLES - post_cnt;
++		start_addr = t_addr - pre_cnt;
++		if (start_addr < 0)
++			start_addr += LIMIT_SAMPLES;
++
++		/* Send pre-trigger data
++		 */
++		vjtag_demo_rw_reg(tcp->socket, 0x08, 10, start_addr);
++		b = devc->raw_sample_buf;
++		for (i = pre_cnt; i > 0; i--)
++			*b++ = vjtag_demo_rw_reg(tcp->socket, 0x02, 8, 0);
++
++		packet.type = SR_DF_LOGIC;
++		packet.payload = &logic;
++		logic.length = pre_cnt;
++		logic.unitsize = 1;
++		logic.data = devc->raw_sample_buf;
++		sr_session_send(cb_data, &packet);
++
++		/* Mark trigger position
++		 */
++		packet.type = SR_DF_TRIGGER;
++		sr_session_send(cb_data, &packet);
++
++		/* Sent post-trigger data
++		 */
++		vjtag_demo_rw_reg(tcp->socket, 0x08, 10, t_addr);
++		b = devc->raw_sample_buf;
++		for (i = post_cnt; i > 0; i--)
++			*b++ = vjtag_demo_rw_reg(tcp->socket, 0x02, 8, 0);
++
++		packet.type = SR_DF_LOGIC;
++		packet.payload = &logic;
++		logic.length = post_cnt;
++		logic.unitsize = 1;
++		logic.data = devc->raw_sample_buf;
++		sr_session_send(cb_data, &packet);
++
++		g_free(devc->raw_sample_buf);
++		devc->raw_sample_buf = NULL;
+ 
+-	if (revents == G_IO_IN) {
+-		/* TODO */
++		sr_dbg("Triggered, stopping acquisition.");
++		sr_session_source_remove(sdi->session, fd);
++		std_session_send_df_end(sdi);
+ 	}
+ 
+ 	return TRUE;
+diff --git a/src/hardware/vjtag-demo/protocol.h b/src/hardware/vjtag-demo/protocol.h
+index bdb20ff5..cd67ffb1 100644
+--- a/src/hardware/vjtag-demo/protocol.h
++++ b/src/hardware/vjtag-demo/protocol.h
+@@ -27,6 +27,9 @@
+ 
+ #define LOG_PREFIX "vjtag-demo"
+ 
++#define NUM_CHANNELS  8
++#define LIMIT_SAMPLES 1024
++#define SAMPLE_RATE   SR_MHZ(25)
+ 
+ struct vjtag_demo_tcp {
+ 	char *address;
+@@ -35,22 +38,28 @@ struct vjtag_demo_tcp {
+ };
+ 
+ struct dev_context {
+-	uint32_t data_width;
+-	uint64_t limit_samples;
++        uint64_t limit_samples;
++	uint64_t capture_ratio;
++        uint8_t  t_mask;
++        uint8_t  t_data;
++        //uint8_t  t_edge_r;
++        //uint8_t  t_edge_f;
++        uint8_t * raw_sample_buf;
+ };
+ 
+ SR_PRIV struct vjtag_demo_tcp *vjtag_demo_tcp_new(void);
+ SR_PRIV void vjtag_demo_tcp_free(struct vjtag_demo_tcp *tcp);
+-
+ SR_PRIV int vjtag_demo_tcp_open(struct vjtag_demo_tcp *tcp);
+ SR_PRIV int vjtag_demo_tcp_close(struct vjtag_demo_tcp *tcp);
+-
+-SR_PRIV int vjtag_demo_tcp_receive(struct vjtag_demo_tcp *tcp,
+-                                 uint8_t *buf, size_t bufsize);
+-
++SR_PRIV char *vjtag_demo_recv(const int fd);
++SR_PRIV char *vjtag_demo_run_cmd(int fd, const char *cmd);
++SR_PRIV int vjtag_demo_check_id(struct vjtag_demo_tcp *tcp);
+ SR_PRIV int vjtag_demo_convert_trigger(const struct sr_dev_inst *sdi);
+-// SR_PRIV struct dev_context *vjtag_demo_dev_new(void);
+-
++SR_PRIV uint32_t vjtag_demo_rw_reg(int fd, uint8_t r, uint8_t l, uint32_t d);
++SR_PRIV int vjtag_demo_configure_trigger(int fd, struct dev_context *devc);
++SR_PRIV int vjtag_demo_configure_pre_store(int fd, struct dev_context *devc);
++SR_PRIV int vjtag_demo_acquisition_start(int fd);
++SR_PRIV int vjtag_demo_acquisition_stop(int fd);
+ SR_PRIV int vjtag_demo_receive_data(int fd, int revents, void *cb_data);
+ 
+ #endif
+-- 
+2.24.1
+
