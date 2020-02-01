@@ -7,6 +7,9 @@ TEX_DIR := ../tex
 PDFS := $(PDF_NAME) application.pdf
 CCBY := $(TEX_DIR)/by.eps
 
+VCARD_DIR  := ../vcard
+VCARD := github-vcard.png
+
 RM := rm -f
 SED := sed
 CP  := cp
@@ -23,6 +26,7 @@ clean:
 	$(RM) $(TEX_FILES)
 	$(RM) $(notdir $(CCBY)) *-converted-to.pdf
 	$(RM) *.out *.aux *.nav *.log *.snm *.toc
+	$(RM) $(VCARD)
 
 distclean: clean
 	$(RM) $(PDFS)
@@ -32,10 +36,14 @@ header.tex: $(TEX_DIR)/header.tex
 	$(SED) -e's/@DATE@/$(DATE)/' $< > $@
 	$(CP) $(CCBY) .
 
+$(VCARD):
+	$(MAKE) -C $(VCARD_DIR)
+	$(CP) $(VCARD_DIR)/$(VCARD) .
+
 $(TEX_NAME): $(TITLE).tex
 	$(CP) $< $@
 
-$(PDF_NAME): $(TEX_FILES)
+$(PDF_NAME): $(TEX_FILES) $(VCARD)
 	$(TEX) $(TEX_NAME)
 	$(TEX) $(TEX_NAME)
 	$(TEX) $(TEX_NAME)
