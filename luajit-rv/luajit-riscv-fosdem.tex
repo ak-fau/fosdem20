@@ -12,27 +12,165 @@
   \titlepage
 \end{frame}
 
-\frame{\tableofcontents[subsectionstyle=show]}
-
 \section{Intro}
 
-\begin{frame}
-\end{frame}
+\input{../tex/who_am_i.tex}
+
+\frame{\tableofcontents[subsectionstyle=show]}
 
 \section{Motivation}
 
+\subsection{Why RISC-V}
+
 \begin{frame}
+  \frametitle{Why RISC-V?}
+
+  \begin{minipage}{8.5cm}
+  RISC-V (“risk-five”) is an open source Instruction Set Architecture
+  (ISA) specification
+  \end{minipage}
+
+  \vspace{-1.5cm}
+  \begin{flushright}
+    \includegraphics[height=1.5cm]{riscv-logo-1.png}
+  \end{flushright}
+
+  \begin{itemize}
+    \item open-source, royalty-free
+    \item scalable from 32-bit MCU with reduced number of registers
+    (rv32e) to multi-core 64-bit OoO CPU (and even 128-bit)
+    \item proven on FPGAs and silicon tape-outs
+    \item modular design with both standard extensions and resever
+    encoding space for custom extensions
+    \item already used in a products as a soft-core MCU on FPGAs,
+    SoC-FPGA with hard-core RISC-V CPU is coming later this year
+  \end{itemize}
+\end{frame}
+
+\subsection{Why Lua}
+\begin{frame}
+  \frametitle{Why Lua?}
+
+  Lua is a powerful, efficient, lightweight, embeddable scripting
+  language. It supports procedural programming, object-oriented
+  programming, functional programming, data-driven programming, and data
+  description.
+
+  \vskip.3cm
+  \begin{minipage}{10cm}
+  \begin{itemize}
+    \item simple
+    \item interactive
+    \item very compact and portable
+    \item simple interface to C and, through it, to an underlying hardware
+    \item fast (if it really matters)
+  \end{itemize}
+  \end{minipage}
+  \vskip.3cm
+  Contemporary replacement for Forth.  First tried on NIOS II for
+  optical link transceiver testing and training in 2012.
+
+  \vspace{-5cm}
+  \begin{flushright}
+    \includegraphics[height=3.5cm]{de4.jpg}
+  \end{flushright}
+
+\end{frame}
+
+\subsection{Why luajit}
+\begin{frame}
+\frametitle{Why \texttt{luajit}?}
+LuaJIT is a Just-In-Time Compiler (JIT) for the Lua programming language.
+
+  \begin{itemize}
+  \item \textbf{dynamic assembler}
+  \begin{itemize}
+    \item for experiments with CPU extensions and hardware accelerators
+    \item gcc/binutils/llvm are well beyond my comprehension and are
+    not suitable for rapid experiments directly on hardware
+    \end{itemize}
+    \item used in various interesting projects
+    \begin{itemize}
+    \item LuaRadio (\texttt{https://luaradio.io/})
+    \item Tarantool DB (\texttt{https://www.tarantool.io/en/})
+    \item luapower (\texttt{https://luapower.com/})
+  \end{itemize}
+
+  \item why \textbf{not}
+    \begin{itemize}
+    \item the project seems to be not actively developed and maintained since 2017
+    \item several [non synchronized] forks
+    \item stick to Lua 5.1
+    \end{itemize}
+
+  \end{itemize}
 \end{frame}
 
 \section{luajit}
 
+\begin{frame}
+\frametitle{\texttt{luajit} components}
+\begin{itemize}
+\item dynasm
+\item Lua VM (hand-optimized assembler)\\
+      the best [hardest] way to learn RISC-V ISA
+\item tracing JIT
+\item Garbage Collector
+\item extensions: FFI, bit-ops, hard \& soft Floating Point support
+\end{itemize}
+\end{frame}
+
+\section{Status}
+
+\begin{frame}
+\frametitle{Current status}
+\begin{itemize}
+\item running Lua 5.1 on \texttt{spike} and soft-core RISC-V CPU
+\item \texttt{git} repository (fork of \texttt{luajit v2.1})
+\item \texttt{Makefile} changes
+\item \texttt{rv32i} base instruction encoding
+\item registers/immediates/labels -- WIP
+\item everything else -- TODO
+\end{itemize}
+\end{frame}
+
 \section{What's next\dots}
 
 \begin{frame}
-  \vskip.5cm
-  \huge{Thank you!}
-  \vskip2cm
-  \Huge{Questions?..}
+\frametitle{What to do}
+\begin{itemize}
+\item write [all] the code:
+\begin{itemize}
+\item Lua VM on RISC-V assembler
+\item GC
+\item soft and hard FP support
+\item tracing JIT
+\end{itemize}
+\item tests
+\item benchmarks
+\end{itemize}
 \end{frame}
+
+\begin{frame}
+\frametitle{Perspectives}
+Interesting stuff to do, when everything above is running
+\begin{itemize}
+  \item RISC-V J extension -- what language will be the first to shape it?
+  \begin{itemize}
+    \item Java
+    \item JavaScript
+    \item C\#
+    \item what else?...
+  \end{itemize}
+  \item hardware-assisted hot trace detection
+  \item hardware-assisted memory management/garbage collection
+  \item custom ISA extension (accelerator) -- development and testing
+  \item to write yet another Forth on dynasm\\
+  (then to write yet another assembler on Forth)
+\end{itemize}
+\end{frame}
+
+\section{Contact info}
+\input{../tex/final_slide.tex}
 
 \end{document}
